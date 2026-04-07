@@ -2,23 +2,53 @@
 
 import { useEffect, Suspense } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
+import { useAction } from "convex/react";
+import { api } from "../../../../../convex/_generated/api";
 import { CheckCircle2, XCircle, Loader2 } from "lucide-react";
 
 function CallbackContent() {
   const searchParams = useSearchParams();
   const router = useRouter();
+  const processFailsafe = useAction(api.payments.processClientFailsafe);
 
   const success = searchParams.get("success") === "true";
   const id = searchParams.get("id"); // Paymob transaction ID
+  const hmac = searchParams.get("hmac");
 
   useEffect(() => {
-    // Optionally redirect back to the trips/dashboard page after 5 seconds
-    const timer = setTimeout(() => {
-      // Typically you might direct them back to a receipt page or their trips page
-      router.push("/trips");
-    }, 5000);
-    return () => clearTimeout(timer);
-  }, [router]);
+    const handleCallback = async () => {
+      // 1. Gather all query parameters for HMAC failsafe validation
+      const queryData: Record<string, string> = {};
+      searchParams.forEach((val, key) => {
+        queryData[key] = val;
+      });
+
+      // 2. Trigger Convex Failsafe if HMAC is present
+      if (hmac && Object.keys(queryData).length > 0) {
+        try {
+          await processFailsafe({ hmac, queryData });
+        } catch (err) {
+          console.error("Failsafe verification error:", err);
+        }
+      }
+
+      // 3. Break out of iframe and redirect to final destination
+      const timer = setTimeout(() => {
+        const top = window.top;
+        const targetUrl = success ? "/bookings" : "/dashboard?payment_failed=true";
+
+        if (top !== window.self && top) {
+          top.location.href = targetUrl;
+        } else {
+          router.push(targetUrl);
+        }
+      }, 3000);
+
+      return () => clearTimeout(timer);
+    };
+
+    handleCallback();
+  }, [searchParams, processFailsafe, success, router]);
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-slate-50 p-6">
@@ -45,12 +75,10 @@ function CallbackContent() {
           </>
         )}
 
-        <button
-          onClick={() => router.push("/trips")}
-          className="w-full py-3 bg-slate-900 text-white rounded-xl font-bold flex items-center justify-center gap-2 hover:bg-slate-800 transition-colors"
-        >
-          Return to Trips
-        </button>
+        <div className="flex items-center gap-2 text-slate-400 text-sm font-medium">
+          <Loader2 className="w-4 h-4 animate-spin" />
+          <span>Redirecting to your dashboard...</span>
+        </div>
       </div>
     </div>
   );
@@ -58,7 +86,7 @@ function CallbackContent() {
 
 export default function PaymentCallbackPage() {
   return (
-    <Suspense fallback={<div className="min-h-screen flex items-center justify-center bg-slate-50"><Loader2 className="animate-spin" /></div>}>
+    <Suspense fallback={<div className="min-h-screen flex items-center justify-center bg-slate-50"><Loader2 className="animate-spin text-blue-600" /></div>}>
       <CallbackContent />
     </Suspense>
   );
