@@ -5,13 +5,14 @@ import { useGoogleAuth } from "@/features/auth/hooks/useGoogleAuth";
 import { ROUTES } from "@/lib/constants";
 import {
   LayoutDashboard, Route, UserCog, Users, Bus, BarChart3,
-  Plus, HelpCircle, LogOut, Banknote,
+  Plus, HelpCircle, LogOut, Banknote, Wallet,
 } from "lucide-react";
 
 const NAV_ITEMS = [
   { label: "Dashboard", icon: LayoutDashboard, href: ROUTES.ADMIN },
   { label: "Bookings",  icon: Users,           href: ROUTES.ADMIN_BOOKINGS },
   { label: "InstaPay",  icon: Banknote,        href: ROUTES.ADMIN_INSTAPAY },
+  { label: "Wallet",    icon: Wallet,          href: ROUTES.ADMIN_WALLET },
   { label: "Trips",     icon: Route,           href: ROUTES.ADMIN_TRIPS },
   { label: "Drivers",   icon: UserCog,         href: ROUTES.ADMIN_DRIVERS },
   { label: "Users",     icon: Users,           href: ROUTES.ADMIN_USERS },

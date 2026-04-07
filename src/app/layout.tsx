@@ -43,6 +43,13 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en" className={inter.variable}>
+      <head>
+        {/* Material Symbols Outlined — used by wallet page and design system */}
+        <link
+          href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap"
+          rel="stylesheet"
+        />
+      </head>
       <body className="min-h-screen antialiased bg-[#f7f9ff] text-[#181c20]">
         <ConvexClientProvider>
           <GlobalOnboardingGuard>

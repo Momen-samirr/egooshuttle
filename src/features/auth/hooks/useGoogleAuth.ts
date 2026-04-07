@@ -58,9 +58,12 @@ export function useGoogleAuth(): UseGoogleAuthReturn {
     setError(null);
     setIsSigningIn(true);
     try {
-      // 1. Trigger the Google OAuth flow and explicitly set the return URL
-      // If we don't set this, it drops the user at standard '/' with ?code= waiting.
-      await signIn("google", { redirectTo: "/dashboard" });
+      // 1. Trigger the Google OAuth flow.
+      //    redirectTo must be a relative path — Convex Auth resolves it
+      //    against the SITE_URL env var set on the Convex dashboard.
+      //    For local dev: set SITE_URL = http://localhost:3000
+      //    For production: set SITE_URL = https://egooshuttle.egoobus.com
+      await signIn("google", { redirectTo: "/" });
     } catch (err: unknown) {
       // Map known error messages to typed error codes
       const msg = err instanceof Error ? err.message.toLowerCase() : "";

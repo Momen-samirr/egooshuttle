@@ -173,8 +173,61 @@ export const processWebhookCallback = internalMutation({
       if (!intent) return;
       
       if (args.success) {
-         // Handoff to bookingDays logic to finalize creation
          await ctx.db.patch(intentId, { paymobOrderId: args.orderId, updatedAt: new Date().toISOString() });
+
+         // ================================================================
+         // WALLET TOP-UP PATH: Credit wallet instead of confirming booking
+         // ================================================================
+         const payload = intent.bookingPayload as any;
+         if (payload?.type === "topup" && intent.walletId) {
+           await ctx.db.patch(intentId, { status: "success", transactionId: args.orderId, updatedAt: new Date().toISOString() });
+           
+           // Credit the wallet
+           const wallet = await ctx.db.get(intent.walletId);
+           if (wallet) {
+             const balanceBefore = wallet.balance;
+             const balanceAfter = Math.round((balanceBefore + intent.amount) * 100) / 100;
+             
+             await ctx.db.patch(intent.walletId, {
+               balance: balanceAfter,
+               updatedAt: new Date().toISOString(),
+             });
+
+             // Update the pending wallet transaction to success
+             const pendingTx = await ctx.db
+               .query("walletTransactions")
+               .withIndex("by_idempotencyKey", (q) => q.eq("idempotencyKey", `topup_${intentId}`))
+               .first();
+             
+             if (pendingTx) {
+               await ctx.db.patch(pendingTx._id, {
+                 balanceBefore,
+                 balanceAfter,
+                 topUpStatus: "success",
+               });
+             } else {
+               await ctx.db.insert("walletTransactions", {
+                 walletId: intent.walletId,
+                 userId: intent.userId,
+                 type: "TOP_UP",
+                 amount: intent.amount,
+                 balanceBefore,
+                 balanceAfter,
+                 paymentIntentId: intentId,
+                 topUpMethod: "card",
+                 topUpStatus: "success",
+                 description: `Top-up via card — EGP ${intent.amount.toFixed(2)}`,
+                 idempotencyKey: `topup_${intentId}`,
+                 createdAt: new Date().toISOString(),
+               });
+             }
+           }
+           return;
+         }
+
+         // ================================================================
+         // EXISTING PATH: Booking confirmation
+         // ================================================================
          const { executePaymentConfirmation } = await import("./bookingDays");
          await executePaymentConfirmation(ctx, intentId, args.orderId);
       } else {

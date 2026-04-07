@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Bus, Home, Search, User } from "lucide-react";
+import { Bus, Home, Search, User, Wallet } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { ROUTES } from "@/lib/constants";
 
@@ -10,6 +10,7 @@ const items = [
   { href: ROUTES.DASHBOARD, label: "Dashboard", icon: Home },
   { href: ROUTES.TRIPS, label: "Find", icon: Search },
   { href: ROUTES.BOOKINGS, label: "Trips", icon: Bus },
+  { href: ROUTES.WALLET, label: "Wallet", icon: Wallet },
   { href: ROUTES.PROFILE, label: "Profile", icon: User },
 ] as const;
 

@@ -854,3 +854,205 @@ export const getAdminDrivers = query({
     );
   },
 });
+
+// ---------------------------------------------------------------------------
+// Wallet Admin — Dashboard Stats
+// ---------------------------------------------------------------------------
+export const getWalletDashboardStats = query({
+  args: {},
+  handler: async (ctx) => {
+    await requireAdmin(ctx);
+
+    const wallets = await ctx.db.query("wallets").collect();
+    const totalBalance = wallets.reduce((sum, w) => sum + w.balance, 0);
+
+    const recentTopUps = await ctx.db
+      .query("walletTransactions")
+      .withIndex("by_type", (q) => q.eq("type", "TOP_UP"))
+      .order("desc")
+      .take(20);
+
+    const successTopUps = recentTopUps.filter((t) => t.topUpStatus === "success");
+    const pendingTopUps = recentTopUps.filter((t) => t.topUpStatus === "pending");
+
+    const recentPayments = await ctx.db
+      .query("walletTransactions")
+      .withIndex("by_type", (q) => q.eq("type", "PAYMENT"))
+      .order("desc")
+      .take(20);
+
+    const recentRefunds = await ctx.db
+      .query("walletTransactions")
+      .withIndex("by_type", (q) => q.eq("type", "REFUND"))
+      .order("desc")
+      .take(10);
+
+    return {
+      totalWallets: wallets.length,
+      totalBalance: Math.round(totalBalance * 100) / 100,
+      activeWallets: wallets.filter((w) => w.isActive && w.balance > 0).length,
+      recentTopUpCount: successTopUps.length,
+      pendingTopUpCount: pendingTopUps.length,
+      recentPaymentCount: recentPayments.length,
+      recentRefundCount: recentRefunds.length,
+    };
+  },
+});
+
+// ---------------------------------------------------------------------------
+// Wallet Admin — User Wallet Detail
+// ---------------------------------------------------------------------------
+export const getUserWalletDetail = query({
+  args: { userId: v.id("appUsers") },
+  handler: async (ctx, args) => {
+    await requireAdmin(ctx);
+
+    const user = await ctx.db.get(args.userId);
+    if (!user) throw new Error("User not found");
+
+    if (!user.walletId) {
+      return {
+        user: { name: user.name, email: user.email, phone: user.phone },
+        wallet: null,
+        transactions: [],
+      };
+    }
+
+    const wallet = await ctx.db.get(user.walletId);
+    const transactions = await ctx.db
+      .query("walletTransactions")
+      .withIndex("by_userId", (q) => q.eq("userId", args.userId))
+      .order("desc")
+      .take(50);
+
+    return {
+      user: { name: user.name, email: user.email, phone: user.phone },
+      wallet,
+      transactions,
+    };
+  },
+});
+
+// ---------------------------------------------------------------------------
+// Wallet Admin — Manual Adjustment
+// ---------------------------------------------------------------------------
+export const adminAdjustWallet = mutation({
+  args: {
+    userId: v.id("appUsers"),
+    amount: v.number(),     // positive = credit, negative = debit
+    reason: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const admin = await requireAdmin(ctx);
+    const user = await ctx.db.get(args.userId);
+    if (!user) throw new Error("User not found");
+
+    if (!user.walletId) throw new Error("User does not have a wallet");
+
+    const wallet = await ctx.db.get(user.walletId);
+    if (!wallet) throw new Error("Wallet not found");
+
+    const balanceBefore = wallet.balance;
+    const balanceAfter = Math.round((balanceBefore + args.amount) * 100) / 100;
+
+    if (balanceAfter < 0) {
+      throw new Error("Adjustment would result in negative balance");
+    }
+
+    await ctx.db.patch(user.walletId, {
+      balance: balanceAfter,
+      updatedAt: new Date().toISOString(),
+    });
+
+    await ctx.db.insert("walletTransactions", {
+      walletId: user.walletId,
+      userId: args.userId,
+      type: "ADMIN_ADJUSTMENT",
+      amount: Math.abs(args.amount),
+      balanceBefore,
+      balanceAfter,
+      description: `Admin adjustment: ${args.reason}`,
+      adminId: admin._id,
+      idempotencyKey: `admin_${user.walletId}_${Date.now()}`,
+      createdAt: new Date().toISOString(),
+    });
+
+    return { success: true, balanceAfter };
+  },
+});
+
+// ---------------------------------------------------------------------------
+// Wallet Admin — All Wallet Transactions (searchable)
+// ---------------------------------------------------------------------------
+export const getAdminWalletTransactions = query({
+  args: {
+    typeFilter: v.optional(v.union(
+      v.literal("TOP_UP"),
+      v.literal("PAYMENT"),
+      v.literal("REFUND"),
+      v.literal("ADMIN_ADJUSTMENT"),
+    )),
+  },
+  handler: async (ctx, args) => {
+    await requireAdmin(ctx);
+
+    let transactions;
+    if (args.typeFilter) {
+      transactions = await ctx.db
+        .query("walletTransactions")
+        .withIndex("by_type", (q) => q.eq("type", args.typeFilter!))
+        .order("desc")
+        .take(50);
+    } else {
+      transactions = await ctx.db
+        .query("walletTransactions")
+        .order("desc")
+        .take(50);
+    }
+
+    return await Promise.all(
+      transactions.map(async (tx) => {
+        const user = await ctx.db.get(tx.userId);
+
+        // Join paymentHistory to get proof data, status, etc.
+        let paymentIntent = null;
+        let proofUrl: string | null = null;
+        if (tx.paymentIntentId) {
+          paymentIntent = await ctx.db.get(tx.paymentIntentId);
+          if (paymentIntent?.proofImageId) {
+            proofUrl = await ctx.storage.getUrl(paymentIntent.proofImageId);
+          }
+        }
+
+        // Join booking for PAYMENT transactions
+        let bookingInfo = null;
+        if (tx.bookingId) {
+          const booking = await ctx.db.get(tx.bookingId);
+          if (booking?.tripId) {
+            const trip = await ctx.db.get(booking.tripId);
+            bookingInfo = {
+              tripRoute: trip ? `${trip.origin} → ${trip.destination}` : "Unknown Trip",
+              bookingDate: booking.weekStartDate ?? booking.createdAt,
+              seats: booking.seatsBooked,
+              status: booking.status,
+            };
+          }
+        }
+
+        return {
+          ...tx,
+          userName: user?.name ?? "Unknown",
+          userEmail: user?.email ?? "Unknown",
+          // Payment intent details (for top-ups)
+          paymentStatus: paymentIntent?.status ?? null,
+          paymentMethod: paymentIntent?.paymentMethod ?? tx.topUpMethod ?? null,
+          proofUrl,
+          proofReference: paymentIntent?.proofReference ?? null,
+          failureReason: paymentIntent?.failureReason ?? null,
+          // Booking details (for payments)
+          bookingInfo,
+        };
+      })
+    );
+  },
+});

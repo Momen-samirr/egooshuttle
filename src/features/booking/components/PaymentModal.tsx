@@ -1,20 +1,17 @@
 "use client";
 
-import { CreditCard, HelpCircle, CheckCircle2, CalendarDays, X, Banknote } from "lucide-react";
+import { CheckCircle2, CalendarDays, X, Wallet, ArrowRight, AlertTriangle } from "lucide-react";
 import { useState, useEffect } from "react";
 import { cn } from "@/lib/utils";
 import { useQuery } from "convex/react";
 import { api } from "../../../../convex/_generated/api";
-import { Id } from "../../../../convex/_generated/dataModel";
 import { useRouter } from "next/navigation";
-import { InstaPayWorkflow } from "./InstaPayWorkflow";
+import Link from "next/link";
 
 interface PaymentModalProps {
   isOpen: boolean;
   onClose: () => void;
-  selectedMethod: "card-iframe" | "instapay";
-  onMethodChange: (method: "card-iframe" | "instapay") => void;
-  onConfirm: (method: "card-iframe" | "instapay") => void;
+  onConfirm: () => void;
   // Booking Summary Data
   durationText: string;
   seatsCount: number;
@@ -25,17 +22,13 @@ interface PaymentModalProps {
   serviceFee: number;
   totalAmount: number;
   isLoading: boolean;
-  // Iframe rendering
-  paymentKey?: string;
-  iframeId?: string;
-  intentId?: string;
+  // Wallet (instant confirm)
+  walletPaid?: boolean;
 }
 
 export function PaymentModal({
   isOpen,
   onClose,
-  selectedMethod,
-  onMethodChange,
   onConfirm,
   durationText,
   seatsCount,
@@ -46,77 +39,39 @@ export function PaymentModal({
   serviceFee,
   totalAmount,
   isLoading,
-  paymentKey,
-  iframeId,
-  intentId,
+  walletPaid,
 }: PaymentModalProps) {
   const router = useRouter();
+  const walletData = useQuery(api.wallet.getMyWallet);
 
-  const intentStatus = useQuery(api.payments.getIntentStatus, {
-    intentId: intentId,
-  });
+  const hasEnoughBalance = walletData && walletData.balance >= totalAmount;
+  const shortfall = walletData ? totalAmount - walletData.balance : totalAmount;
 
   useEffect(() => {
-    if (intentStatus?.status === "success") {
-      router.push("/bookings"); // redirect to bookings page on success
-    } else if (intentStatus?.status === "failed") {
-      alert(`Payment failed: ${intentStatus.failureReason}`);
-      onClose(); // Auto close to let them retry
+    if (walletPaid) {
+      router.push("/bookings");
     }
-  }, [intentStatus, router, onClose]);
+  }, [walletPaid, router]);
 
   if (!isOpen) return null;
 
   return (
     <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-[100] flex items-center justify-center p-6">
       <div className="bg-white rounded-3xl w-full max-w-lg shadow-2xl overflow-hidden animate-in fade-in zoom-in-95 duration-200 flex flex-col max-h-[90vh]">
-        
-        {paymentKey && iframeId ? (
-          <div className="flex flex-col h-[85vh] w-full relative">
-            <div className="p-4 border-b flex justify-between items-center bg-white shrink-0">
-              <div className="flex items-center gap-2">
-                <div className="w-2 h-2 rounded-full bg-green-500 animate-pulse" />
-                <h2 className="text-lg font-bold text-slate-900">
-                  Secure Payment Gateway
-                </h2>
-              </div>
-              <button 
-                onClick={onClose}
-                className="text-slate-400 hover:text-slate-600 transition-colors"
-                title="Cancel Payment"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-            
-            <div className="flex-1 w-full bg-slate-50 relative overflow-hidden flex flex-col p-6">
-                <iframe 
-                  src={`https://accept.paymob.com/api/acceptance/iframes/${iframeId}?payment_token=${paymentKey}`}
-                  className="w-full h-full absolute inset-0 border-0"
-                  allow="payment *"
-                  title="Paymob Payment"
-                />
-            </div>
-          </div>
-        ) : intentId && selectedMethod === "instapay" ? (
-          <div className="p-8 overflow-y-auto">
-            <InstaPayWorkflow 
-              paymentIntentId={intentId as Id<"paymentHistory">}
-              amount={totalAmount}
-              onClose={onClose}
-            />
-          </div>
-        ) : intentStatus?.status === "success" ? (
+
+        {/* ── Success State ── */}
+        {walletPaid ? (
           <div className="p-12 text-center flex flex-col items-center justify-center space-y-4">
-             <CheckCircle2 className="w-16 h-16 text-green-500 mx-auto" />
-             <h2 className="text-2xl font-bold text-slate-900">Payment Successful!</h2>
-             <p className="text-slate-500">Redirecting to your bookings...</p>
+            <CheckCircle2 className="w-16 h-16 text-green-500 mx-auto" />
+            <h2 className="text-2xl font-bold text-slate-900">Payment Successful!</h2>
+            <p className="text-slate-500">Redirecting to your bookings...</p>
           </div>
         ) : (
+          /* ── Confirm Booking ── */
           <div className="p-8 overflow-y-auto">
             <div className="flex justify-between items-center mb-6">
               <h2 className="text-2xl font-bold text-slate-900">Confirm Booking</h2>
-              <button 
+              <button
                 onClick={onClose}
                 disabled={isLoading}
                 className="text-slate-400 hover:text-slate-600 transition-colors disabled:opacity-50"
@@ -125,6 +80,7 @@ export function PaymentModal({
               </button>
             </div>
 
+            {/* Booking Summary */}
             <div className="bg-slate-50 rounded-2xl p-6 mb-6">
               <h3 className="text-[10px] font-bold uppercase tracking-widest text-slate-500 mb-4">
                 Booking Summary
@@ -149,6 +105,7 @@ export function PaymentModal({
               </div>
             </div>
 
+            {/* Selected Period */}
             <div className="bg-blue-50 border border-blue-100 rounded-2xl p-4 mb-6 flex items-center justify-between">
               <div className="flex items-center gap-3">
                 <CalendarDays className="text-blue-600 w-5 h-5" />
@@ -166,36 +123,82 @@ export function PaymentModal({
               </button>
             </div>
 
-            <div className="bg-slate-50 rounded-2xl p-6 mb-8">
+            {/* ── Wallet Payment Method (Only Option) ── */}
+            <div className="bg-slate-50 rounded-2xl p-6 mb-6">
               <div className="flex justify-between items-center mb-4">
                 <span className="text-xs font-bold uppercase tracking-widest text-slate-500">
                   Payment Method
                 </span>
               </div>
-              <div className="grid grid-cols-2 gap-3">
-                <button
-                  onClick={() => onMethodChange("card-iframe")}
-                  className={cn(
-                    "border-2 rounded-xl p-4 flex flex-col items-center justify-center gap-2 transition-all",
-                    selectedMethod === "card-iframe" ? "border-blue-600 bg-blue-50 text-blue-700" : "border-slate-200 bg-white text-slate-500 hover:border-slate-300"
-                  )}
-                >
-                  <CreditCard className="w-6 h-6" />
-                  <span className="text-sm font-bold whitespace-nowrap">Pay with card</span>
-                </button>
-                <button
-                  onClick={() => onMethodChange("instapay")}
-                  className={cn(
-                    "border-2 rounded-xl p-4 flex flex-col items-center justify-center gap-2 transition-all",
-                    selectedMethod === "instapay" ? "border-blue-600 bg-blue-50 text-blue-700" : "border-slate-200 bg-white text-slate-500 hover:border-slate-300"
-                  )}
-                >
-                  <Banknote className="w-6 h-6" />
-                  <span className="text-sm font-bold whitespace-nowrap">InstaPay</span>
-                </button>
+
+              {/* Wallet Card — always selected */}
+              <div className="border-2 border-emerald-600 bg-emerald-50 rounded-2xl p-5 relative">
+                <div className="flex items-center gap-4">
+                  <div className="w-12 h-12 rounded-xl bg-emerald-600 flex items-center justify-center">
+                    <Wallet className="w-6 h-6 text-white" />
+                  </div>
+                  <div className="flex-1">
+                    <p className="font-bold text-slate-900">EgooBus Wallet</p>
+                    <p className="text-xs text-slate-500 mt-0.5">Instant confirmation</p>
+                  </div>
+                  <div className="text-right">
+                    <p className="text-lg font-black text-emerald-600">
+                      EGP {(walletData?.balance ?? 0).toFixed(2)}
+                    </p>
+                    <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400">
+                      Balance
+                    </p>
+                  </div>
+                </div>
+
+                {/* Check mark */}
+                <div className="absolute top-3 right-3">
+                  <CheckCircle2 className="w-5 h-5 text-emerald-600 fill-emerald-100" />
+                </div>
+              </div>
+
+              {/* Balance Status */}
+              <div className="mt-4">
+                {walletData === undefined ? (
+                  <div className="flex items-center gap-2 p-3 rounded-xl bg-slate-100">
+                    <div className="w-4 h-4 border-2 border-slate-400 border-t-transparent rounded-full animate-spin" />
+                    <span className="text-xs font-medium text-slate-500">Loading wallet...</span>
+                  </div>
+                ) : hasEnoughBalance ? (
+                  <div className="flex items-center gap-2 text-emerald-600 bg-emerald-50 border border-emerald-200 p-3 rounded-xl">
+                    <CheckCircle2 className="w-4 h-4 shrink-0" />
+                    <span className="text-xs font-bold">
+                      Sufficient balance — EGP {walletData.balance.toFixed(2)} available
+                    </span>
+                  </div>
+                ) : (
+                  <div className="bg-red-50 border border-red-200 p-4 rounded-xl space-y-3">
+                    <div className="flex items-start gap-2">
+                      <AlertTriangle className="w-4 h-4 text-red-500 shrink-0 mt-0.5" />
+                      <div>
+                        <p className="text-xs font-bold text-red-600">
+                          Insufficient balance
+                        </p>
+                        <p className="text-xs text-red-500 mt-0.5">
+                          You need <strong>EGP {shortfall.toFixed(2)}</strong> more.
+                          Current balance: EGP {(walletData?.balance ?? 0).toFixed(2)}
+                        </p>
+                      </div>
+                    </div>
+                    <Link
+                      href="/wallet"
+                      className="flex items-center justify-center gap-2 w-full py-3 bg-blue-600 text-white rounded-xl font-bold text-sm hover:bg-blue-700 transition-colors"
+                    >
+                      <Wallet className="w-4 h-4" />
+                      Top Up Wallet
+                      <ArrowRight className="w-4 h-4" />
+                    </Link>
+                  </div>
+                )}
               </div>
             </div>
 
+            {/* Price Breakdown */}
             <div className="space-y-3 mb-8">
               <div className="flex justify-between text-sm">
                 <span className="text-slate-500">Base Fare</span>
@@ -212,17 +215,30 @@ export function PaymentModal({
               </div>
             </div>
 
+            {/* Confirm Button */}
             <button
-              onClick={() => onConfirm(selectedMethod)}
-              disabled={isLoading}
-              className="w-full bg-blue-600 text-white py-4 rounded-xl font-black text-lg shadow-lg shadow-blue-600/20 hover:bg-blue-700 active:scale-[0.98] transition-all disabled:opacity-50 disabled:cursor-not-allowed flex justify-center items-center gap-2"
+              onClick={onConfirm}
+              disabled={isLoading || !hasEnoughBalance}
+              className={cn(
+                "w-full py-4 rounded-xl font-black text-lg shadow-lg active:scale-[0.98] transition-all flex justify-center items-center gap-2",
+                hasEnoughBalance
+                  ? "bg-emerald-600 text-white shadow-emerald-600/20 hover:bg-emerald-700"
+                  : "bg-slate-200 text-slate-400 cursor-not-allowed shadow-none"
+              )}
             >
               {isLoading ? (
                 <svg className="animate-spin h-5 w-5 text-white" fill="none" viewBox="0 0 24 24">
                   <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
                   <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
                 </svg>
-              ) : selectedMethod === "instapay" ? "Confirm Booking" : "Proceed to Payment"}
+              ) : hasEnoughBalance ? (
+                <>
+                  <Wallet className="w-5 h-5" />
+                  Pay with Wallet
+                </>
+              ) : (
+                "Insufficient Balance"
+              )}
             </button>
           </div>
         )}

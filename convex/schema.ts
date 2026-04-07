@@ -41,6 +41,7 @@ export default defineSchema({
     defaultDropoffLat: v.optional(v.number()),
     defaultDropoffLng: v.optional(v.number()),
     isOnboarded: v.optional(v.boolean()),
+    walletId: v.optional(v.id("wallets")), // Linked wallet (lazy-created)
 
     createdAt: v.string(),
 
@@ -91,7 +92,7 @@ export default defineSchema({
     tripId: v.id("trips"),
     userId: v.id("appUsers"),
     seatsBooked: v.number(),
-    paymentMethod: v.union(v.literal("cash"), v.literal("card"), v.literal("instapay")),
+    paymentMethod: v.union(v.literal("cash"), v.literal("card"), v.literal("instapay"), v.literal("wallet")),
     paymentStatus: v.union(
       v.literal("pending"),
       v.literal("under_review"),
@@ -107,6 +108,7 @@ export default defineSchema({
     totalAmount: v.number(),
     selectedDays: v.optional(v.array(v.string())), // ["2026-04-07", "2026-04-08"]
     weekStartDate: v.optional(v.string()),          // ISO Sunday of the booked week
+    walletTransactionId: v.optional(v.id("walletTransactions")), // Set when paid via wallet
     createdAt: v.string(),
   })
     .index("by_trip", ["tripId"])
@@ -152,10 +154,10 @@ export default defineSchema({
   // -------
   paymentHistory: defineTable({
     userId: v.id("appUsers"),
-    tripId: v.id("trips"),
+    tripId: v.optional(v.id("trips")),       // Optional for wallet top-ups (no trip)
     amount: v.number(),
     status: v.union(v.literal("pending"), v.literal("under_review"), v.literal("success"), v.literal("failed")),
-    paymentMethod: v.union(v.literal("card"), v.literal("instapay"), v.literal("cash")),
+    paymentMethod: v.union(v.literal("card"), v.literal("instapay"), v.literal("cash"), v.literal("wallet_topup")),
     bookingPayload: v.any(), // JSON containing selectedDays, numberOfWeeks, seatsBooked, etc.
     paymobOrderId: v.optional(v.string()), 
     transactionId: v.optional(v.string()),
@@ -163,10 +165,64 @@ export default defineSchema({
     proofReference: v.optional(v.string()),
     expiresAt: v.optional(v.number()), // Hold expiration timestamp
     failureReason: v.optional(v.string()),
+    walletId: v.optional(v.id("wallets")),  // For top-up intents
     createdAt: v.string(),
     updatedAt: v.string(),
   })
     .index("by_user", ["userId"])
     .index("by_status", ["status"])
     .index("by_paymob_order", ["paymobOrderId"]),
+
+  // -------
+  // Wallets — one per user, lazy-created
+  // -------
+  wallets: defineTable({
+    userId: v.id("appUsers"),
+    balance: v.number(),         // EGP, two-decimal precision
+    currency: v.literal("EGP"),
+    isActive: v.boolean(),
+    createdAt: v.string(),
+    updatedAt: v.string(),
+  })
+    .index("by_userId", ["userId"]),
+
+  // -------
+  // Wallet Transactions — immutable ledger
+  // -------
+  walletTransactions: defineTable({
+    walletId: v.id("wallets"),
+    userId: v.id("appUsers"),
+    type: v.union(
+      v.literal("TOP_UP"),
+      v.literal("PAYMENT"),
+      v.literal("REFUND"),
+      v.literal("ADMIN_ADJUSTMENT"),
+    ),
+    amount: v.number(),            // Always positive (direction inferred from type)
+    balanceBefore: v.number(),
+    balanceAfter: v.number(),
+    // References
+    bookingId: v.optional(v.id("bookings")),
+    paymentIntentId: v.optional(v.id("paymentHistory")),
+    // Top-up specific
+    topUpMethod: v.optional(v.union(
+      v.literal("card"),
+      v.literal("instapay"),
+      v.literal("admin"),
+    )),
+    topUpStatus: v.optional(v.union(
+      v.literal("pending"),
+      v.literal("success"),
+      v.literal("failed"),
+    )),
+    // Metadata
+    description: v.string(),
+    idempotencyKey: v.optional(v.string()),
+    adminId: v.optional(v.id("appUsers")),
+    createdAt: v.string(),
+  })
+    .index("by_wallet", ["walletId"])
+    .index("by_userId", ["userId"])
+    .index("by_type", ["type"])
+    .index("by_idempotencyKey", ["idempotencyKey"]),
 });

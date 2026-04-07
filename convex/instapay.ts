@@ -110,14 +110,21 @@ export const getPendingVerifications = query({
     return await Promise.all(
       pending.map(async (p) => {
         const user = await ctx.db.get(p.userId);
-        const trip = await ctx.db.get(p.tripId);
+        const trip = p.tripId ? await ctx.db.get(p.tripId) : null;
         const proofUrl = p.proofImageId ? await ctx.storage.getUrl(p.proofImageId) : null;
+
+        // Determine display info — top-ups have no trip
+        const isTopUp = (p.bookingPayload as any)?.type === "topup";
+        const tripInfoText = isTopUp
+          ? `Wallet Top-up — EGP ${p.amount.toFixed(2)}`
+          : trip ? `${trip.origin} → ${trip.destination}` : "Unknown Trip";
 
         return {
           ...p,
           userName: user?.name,
           userEmail: user?.email,
-          tripInfo: trip ? `${trip.origin} → ${trip.destination}` : "Unknown Trip",
+          tripInfo: tripInfoText,
+          isTopUp,
           proofUrl,
         };
       })
@@ -143,15 +150,83 @@ export const verifyInstaPayPayment = mutation({
     }
 
     const now = new Date().toISOString();
+    const payload = intent.bookingPayload as any;
 
+    // ================================================================
+    // WALLET TOP-UP PATH: Credit wallet on approval
+    // ================================================================
+    if (payload?.type === "topup" && intent.walletId) {
+      if (args.action === "approve") {
+        await ctx.db.patch(intent._id, { status: "success", updatedAt: now });
+
+        const wallet = await ctx.db.get(intent.walletId);
+        if (wallet) {
+          const balanceBefore = wallet.balance;
+          const balanceAfter = Math.round((balanceBefore + intent.amount) * 100) / 100;
+
+          await ctx.db.patch(intent.walletId, {
+            balance: balanceAfter,
+            updatedAt: now,
+          });
+
+          // Update pending wallet transaction
+          const pendingTx = await ctx.db
+            .query("walletTransactions")
+            .withIndex("by_idempotencyKey", (q) => q.eq("idempotencyKey", `topup_${intent._id}`))
+            .first();
+
+          if (pendingTx) {
+            await ctx.db.patch(pendingTx._id, {
+              balanceBefore,
+              balanceAfter,
+              topUpStatus: "success",
+            });
+          } else {
+            await ctx.db.insert("walletTransactions", {
+              walletId: intent.walletId,
+              userId: intent.userId,
+              type: "TOP_UP",
+              amount: intent.amount,
+              balanceBefore,
+              balanceAfter,
+              paymentIntentId: intent._id,
+              topUpMethod: "instapay",
+              topUpStatus: "success",
+              description: `Top-up via InstaPay — EGP ${intent.amount.toFixed(2)}`,
+              idempotencyKey: `topup_${intent._id}`,
+              createdAt: now,
+            });
+          }
+        }
+      } else {
+        // Reject top-up
+        await ctx.db.patch(intent._id, {
+          status: "failed",
+          failureReason: args.reason || "Top-up proof rejected by admin",
+          updatedAt: now,
+        });
+
+        // Mark pending wallet transaction as failed
+        const pendingTx = await ctx.db
+          .query("walletTransactions")
+          .withIndex("by_idempotencyKey", (q) => q.eq("idempotencyKey", `topup_${intent._id}`))
+          .first();
+        if (pendingTx) {
+          await ctx.db.patch(pendingTx._id, { topUpStatus: "failed" });
+        }
+      }
+      return { success: true };
+    }
+
+    // ================================================================
+    // EXISTING PATH: Booking verification
+    // ================================================================
     if (args.action === "approve") {
-      // 1. Mark intent as success
       await ctx.db.patch(intent._id, {
         status: "success",
         updatedAt: now,
       });
 
-      // 2. Finalize all associated 'under_review' bookings
       const bookings = await ctx.db
         .query("bookings")
         .withIndex("by_user", (q) => q.eq("userId", intent.userId))
@@ -165,7 +240,6 @@ export const verifyInstaPayPayment = mutation({
           paymentStatus: "paid",
         });
 
-        // 3. Update seat reservations to 'active'
         const days = await ctx.db
             .query("bookingDays")
             .withIndex("by_booking", (q) => q.eq("bookingId", booking._id))
@@ -176,7 +250,6 @@ export const verifyInstaPayPayment = mutation({
         }
       }
     } else {
-      // Reject Action
       await ctx.db.patch(intent._id, {
         status: "failed",
         failureReason: args.reason || "Payment proof rejected by admin",
@@ -196,7 +269,6 @@ export const verifyInstaPayPayment = mutation({
           paymentStatus: "failed",
         });
 
-        // Release seats
         const days = await ctx.db
             .query("bookingDays")
             .withIndex("by_booking", (q) => q.eq("bookingId", booking._id))

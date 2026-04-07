@@ -2,16 +2,19 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Bell, Search, LogOut } from "lucide-react";
+import { Bell, Search, LogOut, Wallet } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { ROUTES } from "@/lib/constants";
 import { useClientDashboardStore } from "@/store/client-dashboard-store";
 import { useGoogleAuth } from "@/features/auth/hooks/useGoogleAuth";
+import { useQuery } from "convex/react";
+import { api } from "../../../../convex/_generated/api";
 
 const links = [
   { href: ROUTES.DASHBOARD, label: "Dashboard" },
   { href: ROUTES.TRIPS, label: "Find Trips" },
   { href: ROUTES.BOOKINGS, label: "My Bookings" },
+  { href: ROUTES.WALLET, label: "Wallet" },
 ] as const;
 
 export function ClientTopNav({
@@ -23,6 +26,7 @@ export function ClientTopNav({
   const navSearchQuery = useClientDashboardStore((s) => s.navSearchQuery);
   const setNavSearchQuery = useClientDashboardStore((s) => s.setNavSearchQuery);
   const { signOut } = useGoogleAuth();
+  const wallet = useQuery(api.wallet.getMyWallet);
 
   return (
     <nav className="fixed top-0 left-0 right-0 z-50 border-b border-[color-mix(in_srgb,var(--color-outline-variant)_20%,transparent)] bg-white/80 shadow-sm backdrop-blur-md dark:border-white/10 dark:bg-slate-950/80 dark:shadow-none">
@@ -56,6 +60,16 @@ export function ClientTopNav({
           </div>
         </div>
         <div className="flex items-center gap-4">
+          {/* Wallet Balance Pill */}
+          {wallet && (
+            <Link
+              href={ROUTES.WALLET}
+              className="hidden sm:flex items-center gap-1.5 bg-emerald-50 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-400 px-3 py-1.5 rounded-full text-sm font-bold hover:bg-emerald-100 dark:hover:bg-emerald-900/50 transition-colors border border-emerald-200/50 dark:border-emerald-700/30"
+            >
+              <Wallet className="w-3.5 h-3.5" />
+              EGP {wallet.balance.toFixed(2)}
+            </Link>
+          )}
           <div className="relative hidden sm:block">
             <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[var(--color-on-surface-variant)]" />
             <input
@@ -92,3 +106,4 @@ export function ClientTopNav({
     </nav>
   );
 }
+

@@ -20,6 +20,7 @@ import type * as payments from "../payments.js";
 import type * as scripts from "../scripts.js";
 import type * as trips from "../trips.js";
 import type * as users from "../users.js";
+import type * as wallet from "../wallet.js";
 
 import type {
   ApiFromModules,
@@ -40,6 +41,7 @@ declare const fullApi: ApiFromModules<{
   scripts: typeof scripts;
   trips: typeof trips;
   users: typeof users;
+  wallet: typeof wallet;
 }>;
 
 /**

@@ -2,7 +2,7 @@
 
 import { useState, useCallback } from "react";
 import { useParams, useRouter } from "next/navigation";
-import { useQuery, useMutation, useAction } from "convex/react";
+import { useQuery, useMutation } from "convex/react";
 import { api } from "../../../../../convex/_generated/api";
 import { ArrowLeft } from "lucide-react";
 import { TripDetailHeader } from "@/features/booking/components/TripDetailHeader";
@@ -90,7 +90,7 @@ export default function ClientTripDetailPage() {
   // UI state
   const [isBooking, setIsBooking] = useState(false);
   const [showPaymentModal, setShowPaymentModal] = useState(false);
-  const [selectedPaymentMethod, setSelectedPaymentMethod] = useState<"card-iframe" | "instapay">("card-iframe");
+  const [walletPaid, setWalletPaid] = useState(false);
   const [bookingResult, setBookingResult] = useState<{
     success: boolean;
     message: string;
@@ -111,7 +111,6 @@ export default function ClientTripDetailPage() {
   // ── Mutations ──
   const createMultiWeek = useMutation(api.bookingDays.createMultiWeekBooking);
   const createSingleWeek = useMutation(api.bookingDays.createMultiDayBooking);
-  const initiatePayment = useAction(api.payments.initiatePayment);
 
   // ── Handlers ──
   const toggleDay = useCallback((date: string) => {
@@ -140,35 +139,29 @@ export default function ClientTripDetailPage() {
 
   const canGoPrev = weekStartDate > CURRENT_WEEK_START;
 
-  const [paymentSession, setPaymentSession] = useState<{ key: string; iframeId: string; intentId?: string } | null>(null);
-
   const handleShowPayment = () => {
     if (selectedDays.size === 0) return;
-    setPaymentSession(null); // Reset session before opening
+    setWalletPaid(false);
     setShowPaymentModal(true);
   };
 
-  const handleProceedPayment = async (method: "card-iframe" | "instapay") => {
+  const handleWalletPayment = async () => {
     setIsBooking(true);
     setBookingResult(null);
 
     try {
-      let paymentIntentIdToPay = "";
-      let totalAmountToPay = 0;
-
       if (numberOfWeeks === 1) {
-        // Single-week path
         const result = await createSingleWeek({
           tripId,
           selectedDays: Array.from(selectedDays),
           seatsBooked: 1,
-          paymentMethod: method === "card-iframe" ? "card" : "instapay",
+          paymentMethod: "wallet",
           clientToday: CLIENT_TODAY,
         });
-        paymentIntentIdToPay = result.paymentIntentId;
-        totalAmountToPay = result.totalAmount;
+        if (result.walletPaid) {
+          setWalletPaid(true);
+        }
       } else {
-        // Multi-week path: convert selected dates to day-pattern indices
         const pattern = Array.from(selectedDays)
           .map(dayIndexFromISO)
           .sort((a, b) => a - b);
@@ -178,52 +171,17 @@ export default function ClientTripDetailPage() {
           dayPattern: pattern,
           startWeekDate: weekStartDate,
           numberOfWeeks,
-          paymentMethod: method === "card-iframe" ? "card" : "instapay",
+          paymentMethod: "wallet",
           clientToday: CLIENT_TODAY,
         });
-        paymentIntentIdToPay = result.paymentIntentId;
-        totalAmountToPay = result.totalAmount;
+        if (result.walletPaid) {
+          setWalletPaid(true);
+        }
       }
-      
-      if (method === "instapay") {
-        setPaymentSession({
-          key: undefined as any, 
-          iframeId: undefined as any, 
-          intentId: paymentIntentIdToPay,
-        });
-        return;
-      }
-
-      // Calculate 5% service fee offset matching UI
-      const serviceFee = totalAmountToPay * 0.05;
-      const finalChargedAmount = totalAmountToPay + serviceFee;
-
-      // Handoff to local NextJS API Route to bypass Convex Edge 429 limits
-      const res = await fetch("/api/paymob", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          totalAmount: finalChargedAmount,
-          paymentIntentId: paymentIntentIdToPay,
-        }),
-      });
-      const paymentRes = await res.json();
-
-      if (paymentRes.success && paymentRes.paymentKey && paymentRes.iframeId) {
-        // Render the iframe inside the modal and capture intentId
-        setPaymentSession({
-          key: paymentRes.paymentKey,
-          iframeId: paymentRes.iframeId,
-          intentId: paymentIntentIdToPay,
-        });
-      } else {
-        throw new Error("Payment Gateway failed to generate session.");
-      }
-
     } catch (err) {
       setBookingResult({
         success: false,
-        message: err instanceof Error ? err.message : "Booking & Payment failed. Please try again.",
+        message: err instanceof Error ? err.message : "Booking failed. Please try again.",
       });
       setShowPaymentModal(false);
     } finally {
@@ -484,13 +442,8 @@ export default function ClientTripDetailPage() {
 
       <PaymentModal
         isOpen={showPaymentModal}
-        onClose={() => {
-          setShowPaymentModal(false);
-          setPaymentSession(null);
-        }}
-        selectedMethod={selectedPaymentMethod}
-        onMethodChange={setSelectedPaymentMethod}
-        onConfirm={handleProceedPayment}
+        onClose={() => setShowPaymentModal(false)}
+        onConfirm={handleWalletPayment}
         durationText={`${selectedDays.size * numberOfWeeks} Rides Selected`}
         seatsCount={1}
         selectedDaysCount={selectedDays.size}
@@ -500,9 +453,7 @@ export default function ClientTripDetailPage() {
         serviceFee={scheduleData?.trip?.pricePerSeat * selectedDays.size * numberOfWeeks * 0.05 || 0}
         totalAmount={(scheduleData?.trip?.pricePerSeat * selectedDays.size * numberOfWeeks * 1.05) || 0}
         isLoading={isBooking}
-        paymentKey={paymentSession?.key}
-        iframeId={paymentSession?.iframeId}
-        intentId={paymentSession?.intentId}
+        walletPaid={walletPaid}
       />
     </div>
   );

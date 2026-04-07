@@ -2,6 +2,7 @@ import { query, mutation, internalMutation, QueryCtx, MutationCtx } from "./_gen
 import { v } from "convex/values";
 import { Id } from "./_generated/dataModel";
 import { getAuthUserId } from "@convex-dev/auth/server";
+import { internal } from "./_generated/api";
 
 const DEFAULT_CAPACITY = 14;
 
@@ -302,7 +303,7 @@ export const createMultiDayBooking = mutation({
     tripId: v.id("trips"),
     selectedDays: v.array(v.string()),
     seatsBooked: v.number(),
-    paymentMethod: v.union(v.literal("cash"), v.literal("card"), v.literal("instapay")),
+    paymentMethod: v.union(v.literal("cash"), v.literal("card"), v.literal("instapay"), v.literal("wallet")),
     clientToday: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
@@ -331,6 +332,85 @@ export const createMultiDayBooking = mutation({
 
     const totalAmount = trip.pricePerSeat * sorted.length * args.seatsBooked;
     const now = new Date().toISOString();
+
+    // ======================================================================
+    // WALLET PATH: Instant debit + confirm (no payment intent needed)
+    // ======================================================================
+    if (args.paymentMethod === "wallet") {
+      if (!appUser.walletId) throw new Error("No wallet found. Please create a wallet first.");
+
+      const wallet = await ctx.db.get(appUser.walletId);
+      if (!wallet || !wallet.isActive) throw new Error("Wallet is not active");
+      if (wallet.balance < totalAmount) {
+        throw new Error(
+          `Insufficient wallet balance. Available: EGP ${wallet.balance.toFixed(2)}, Required: EGP ${totalAmount.toFixed(2)}`
+        );
+      }
+
+      // Create confirmed booking
+      const bookingId = await ctx.db.insert("bookings", {
+        tripId: args.tripId,
+        userId: appUser._id,
+        seatsBooked: args.seatsBooked,
+        paymentMethod: "wallet",
+        paymentStatus: "paid",
+        status: "confirmed",
+        totalAmount,
+        selectedDays: sorted,
+        weekStartDate,
+        createdAt: now,
+      });
+
+      // Create active bookingDays (no "reserved" state needed)
+      for (const date of sorted) {
+        await ctx.db.insert("bookingDays", {
+          bookingId,
+          tripId: args.tripId,
+          date,
+          status: "active",
+        });
+      }
+
+      // Debit wallet atomically
+      const idempotencyKey = `wallet_booking_${bookingId}`;
+      const balanceBefore = wallet.balance;
+      const balanceAfter = Math.round((balanceBefore - totalAmount) * 100) / 100;
+
+      await ctx.db.patch(appUser.walletId, {
+        balance: balanceAfter,
+        updatedAt: now,
+      });
+
+      const walletTxId = await ctx.db.insert("walletTransactions", {
+        walletId: appUser.walletId,
+        userId: appUser._id,
+        type: "PAYMENT",
+        amount: totalAmount,
+        balanceBefore,
+        balanceAfter,
+        bookingId,
+        description: `Trip booking: ${trip.origin} → ${trip.destination} — ${sorted.length} days — EGP ${totalAmount.toFixed(2)}`,
+        idempotencyKey,
+        createdAt: now,
+      });
+
+      // Link wallet transaction to booking
+      await ctx.db.patch(bookingId, { walletTransactionId: walletTxId });
+
+      return {
+        paymentIntentId: null,  // No intent needed for wallet
+        totalAmount,
+        daysBooked: sorted.length,
+        weekStartDate,
+        isFullWeek: sorted.length === 5,
+        walletPaid: true,
+        balanceAfter,
+      };
+    }
+
+    // ======================================================================
+    // EXISTING PATH: Card / InstaPay / Cash — unchanged
+    // ======================================================================
     const expiresAt = Date.now() + 30 * 60 * 1000; // 30 minutes
 
     // Create Payment Intent
@@ -398,14 +478,10 @@ export const createMultiDayBooking = mutation({
 export const createMultiWeekBooking = mutation({
   args: {
     tripId: v.id("trips"),
-    /**
-     * Day-of-week indices for the pattern: 0=Sun, 1=Mon, 2=Tue, 3=Wed, 4=Thu.
-     * E.g. [0,1,2] = Sun, Mon, Tue every week.
-     */
     dayPattern: v.array(v.number()),
-    startWeekDate: v.string(),   // ISO Sunday of the first week
-    numberOfWeeks: v.number(),   // 1–52
-    paymentMethod: v.union(v.literal("cash"), v.literal("card"), v.literal("instapay")),
+    startWeekDate: v.string(),
+    numberOfWeeks: v.number(),
+    paymentMethod: v.union(v.literal("cash"), v.literal("card"), v.literal("instapay"), v.literal("wallet")),
     clientToday: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
@@ -416,7 +492,6 @@ export const createMultiWeekBooking = mutation({
     if (args.numberOfWeeks < 1 || args.numberOfWeeks > 52)
       throw new Error("Number of weeks must be between 1 and 52");
 
-    // Validate day pattern indices
     for (const idx of args.dayPattern) {
       if (idx < 0 || idx > 4)
         throw new Error(`Invalid day index ${idx}. Only 0–4 (Sun–Thu) are valid.`);
@@ -432,7 +507,6 @@ export const createMultiWeekBooking = mutation({
         ? trip.availableSeats + trip.bookedPassengers
         : DEFAULT_CAPACITY;
 
-    // PricingService: build week/date plan, skipping past dates
     const weekPlan: Array<{ weekStart: string; dates: string[] }> = [];
     let totalFutureDays = 0;
 
@@ -442,7 +516,7 @@ export const createMultiWeekBooking = mutation({
       const weekStart = base.toISOString().split("T")[0];
 
       const dates = datesForPattern(weekStart, args.dayPattern).filter(
-        (d) => d >= today // skip past dates transparently
+        (d) => d >= today
       );
 
       weekPlan.push({ weekStart, dates });
@@ -453,21 +527,105 @@ export const createMultiWeekBooking = mutation({
       throw new Error("All selected dates are in the past. Please choose a future week.");
     }
 
-    // AvailabilityService: validate every date before any write
     for (const week of weekPlan) {
       for (const date of week.dates) {
         await checkDayAvailability(ctx, args.tripId, date, appUser._id, capacity);
       }
     }
 
-    // BookingService: write Intent for multi-week
     let totalAmount = 0;
     for (const week of weekPlan) {
       totalAmount += trip.pricePerSeat * week.dates.length;
     }
 
     const now = new Date().toISOString();
-    const expiresAt = Date.now() + 30 * 60 * 1000; // 30 minutes
+
+    // ======================================================================
+    // WALLET PATH: Instant debit + confirm
+    // ======================================================================
+    if (args.paymentMethod === "wallet") {
+      if (!appUser.walletId) throw new Error("No wallet found. Please create a wallet first.");
+
+      const wallet = await ctx.db.get(appUser.walletId);
+      if (!wallet || !wallet.isActive) throw new Error("Wallet is not active");
+      if (wallet.balance < totalAmount) {
+        throw new Error(
+          `Insufficient wallet balance. Available: EGP ${wallet.balance.toFixed(2)}, Required: EGP ${totalAmount.toFixed(2)}`
+        );
+      }
+
+      const createdBookingIds: Id<"bookings">[] = [];
+      for (const week of weekPlan) {
+        if (week.dates.length === 0) continue;
+        const weekAmount = trip.pricePerSeat * week.dates.length;
+
+        const bookingId = await ctx.db.insert("bookings", {
+          tripId: args.tripId,
+          userId: appUser._id,
+          seatsBooked: 1,
+          paymentMethod: "wallet",
+          paymentStatus: "paid",
+          status: "confirmed",
+          totalAmount: weekAmount,
+          selectedDays: week.dates,
+          weekStartDate: week.weekStart,
+          createdAt: now,
+        });
+        createdBookingIds.push(bookingId);
+
+        for (const date of week.dates) {
+          await ctx.db.insert("bookingDays", {
+            bookingId,
+            tripId: args.tripId,
+            date,
+            status: "active",
+          });
+        }
+      }
+
+      // Debit wallet atomically
+      const idempotencyKey = `wallet_multi_${createdBookingIds[0]}`;
+      const balanceBefore = wallet.balance;
+      const balanceAfter = Math.round((balanceBefore - totalAmount) * 100) / 100;
+
+      await ctx.db.patch(appUser.walletId, {
+        balance: balanceAfter,
+        updatedAt: now,
+      });
+
+      const walletTxId = await ctx.db.insert("walletTransactions", {
+        walletId: appUser.walletId,
+        userId: appUser._id,
+        type: "PAYMENT",
+        amount: totalAmount,
+        balanceBefore,
+        balanceAfter,
+        bookingId: createdBookingIds[0],
+        description: `Multi-week booking: ${trip.origin} → ${trip.destination} — ${totalFutureDays} days — EGP ${totalAmount.toFixed(2)}`,
+        idempotencyKey,
+        createdAt: now,
+      });
+
+      // Link wallet transaction to first booking
+      for (const bId of createdBookingIds) {
+        await ctx.db.patch(bId, { walletTransactionId: walletTxId });
+      }
+
+      return {
+        paymentIntentId: null,
+        totalAmount,
+        totalDays: totalFutureDays,
+        totalWeeks: weekPlan.length,
+        isFullWeekPattern: args.dayPattern.length === 5,
+        walletPaid: true,
+        balanceAfter,
+      };
+    }
+
+    // ======================================================================
+    // EXISTING PATH: Card / InstaPay / Cash — unchanged
+    // ======================================================================
+    const expiresAt = Date.now() + 30 * 60 * 1000;
 
     const payload = {
       type: "multi",
@@ -487,7 +645,6 @@ export const createMultiWeekBooking = mutation({
       updatedAt: now,
     });
 
-    // Pre-provision bookings and reserve seats across all weeks for ALL methods
     const createdBookingIds: Id<"bookings">[] = [];
     for (const week of weekPlan) {
       if (week.dates.length === 0) continue;
@@ -517,7 +674,6 @@ export const createMultiWeekBooking = mutation({
       }
     }
 
-    // Link the pre-provisioned bookingIds to the payment intent
     await ctx.db.patch(paymentIntentId, { 
       bookingPayload: { ...payload, createdBookingIds } 
     });
@@ -542,7 +698,11 @@ export async function executePaymentConfirmation(ctx: MutationCtx, intentId: Id<
 
   const payload = intent.bookingPayload as any;
 
-  const trip = await ctx.db.get(intent.tripId);
+  // Top-up intents don't have a tripId — they are handled by wallet.creditWallet
+  if (!intent.tripId) return;
+  const tripId = intent.tripId;
+
+  const trip = await ctx.db.get(tripId);
   if (!trip || trip.status === "cancelled") {
     await ctx.db.patch(intent._id, { status: "failed", failureReason: "Trip no longer available", updatedAt: new Date().toISOString() });
     return;
@@ -556,7 +716,7 @@ export async function executePaymentConfirmation(ctx: MutationCtx, intentId: Id<
     // Verify capacity
     if (payload.type === "single") {
       for (const date of payload.selectedDays) {
-        await checkDayAvailability(ctx, intent.tripId, date, intent.userId, capacity);
+        await checkDayAvailability(ctx, tripId, date, intent.userId, capacity);
       }
       
       const bookingId = payload.bookingId;
@@ -573,7 +733,7 @@ export async function executePaymentConfirmation(ctx: MutationCtx, intentId: Id<
     } else if (payload.type === "multi") {
       for (const week of payload.weekPlan) {
         for (const date of week.dates) {
-          await checkDayAvailability(ctx, intent.tripId, date, intent.userId, capacity);
+          await checkDayAvailability(ctx, tripId, date, intent.userId, capacity);
         }
       }
       

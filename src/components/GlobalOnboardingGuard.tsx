@@ -22,10 +22,17 @@ export function GlobalOnboardingGuard({ children }: { children: React.ReactNode 
   useEffect(() => {
     if (isAuthenticated && appUser === null && !hasAttemptedProvisioning.current) {
       hasAttemptedProvisioning.current = true;
-      getOrCreateAppUser().catch((err) => {
-        console.error("Failed to provision appUser:", err);
-        hasAttemptedProvisioning.current = false;
-      });
+      getOrCreateAppUser()
+        .then((result) => {
+          // If auth session wasn't ready yet, the mutation returns null — allow retry
+          if (result === null) {
+            hasAttemptedProvisioning.current = false;
+          }
+        })
+        .catch((err) => {
+          console.error("Failed to provision appUser:", err);
+          hasAttemptedProvisioning.current = false;
+        });
     }
   }, [isAuthenticated, appUser, getOrCreateAppUser]);
 
@@ -89,7 +96,8 @@ export function GlobalOnboardingGuard({ children }: { children: React.ReactNode 
         (pathname.startsWith(ROUTES.DASHBOARD) ||
           pathname.startsWith(ROUTES.TRIPS) ||
           pathname.startsWith(ROUTES.BOOKINGS) ||
-          pathname.startsWith(ROUTES.PROFILE)) &&
+          pathname.startsWith(ROUTES.PROFILE) ||
+          pathname.startsWith(ROUTES.WALLET)) &&
         isDriver
       ) {
         router.push(ROUTES.DRIVER);

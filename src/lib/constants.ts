@@ -28,6 +28,8 @@ export const ROUTES = {
   DASHBOARD: "/dashboard",
   TRIPS: "/trips",
   BOOKINGS: "/bookings",
+  WALLET: "/wallet",
+  WALLET_INSTAPAY: "/wallet/instapay",
   PROFILE: "/profile",
   // Driver
   DRIVER: "/driver",
@@ -38,6 +40,7 @@ export const ROUTES = {
   ADMIN_TRIPS: "/admin/trips",
   ADMIN_BOOKINGS: "/admin/bookings",
   ADMIN_INSTAPAY: "/admin/instapay",
+  ADMIN_WALLET: "/admin/wallet",
   ADMIN_DRIVERS: "/admin/drivers",
   ADMIN_USERS: "/admin/users",
   ADMIN_VEHICLES: "/admin/vehicles",
@@ -48,6 +51,7 @@ export const ROUTES = {
 export const PAYMENT_METHODS = [
   { label: "Cash", value: "cash", icon: "Banknote" },
   { label: "Card (Coming Soon)", value: "card", icon: "CreditCard", disabled: true },
+  { label: "Wallet", value: "wallet", icon: "Wallet" },
 ] as const;
 
 // Trip Status Labels

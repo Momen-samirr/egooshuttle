@@ -192,6 +192,38 @@ export const cancelBooking = mutation({
       });
     }
 
+    // ====================================================================
+    // WALLET REFUND: If the booking was paid via wallet, credit back
+    // ====================================================================
+    if (booking.paymentMethod === "wallet" && booking.paymentStatus === "paid") {
+      const user = await ctx.db.get(booking.userId);
+      if (user?.walletId) {
+        const wallet = await ctx.db.get(user.walletId);
+        if (wallet) {
+          const balanceBefore = wallet.balance;
+          const balanceAfter = Math.round((balanceBefore + booking.totalAmount) * 100) / 100;
+
+          await ctx.db.patch(user.walletId, {
+            balance: balanceAfter,
+            updatedAt: new Date().toISOString(),
+          });
+
+          await ctx.db.insert("walletTransactions", {
+            walletId: user.walletId,
+            userId: booking.userId,
+            type: "REFUND",
+            amount: booking.totalAmount,
+            balanceBefore,
+            balanceAfter,
+            bookingId: args.bookingId,
+            description: `Booking cancellation refund — EGP ${booking.totalAmount.toFixed(2)}`,
+            idempotencyKey: `refund_${args.bookingId}_${Date.now()}`,
+            createdAt: new Date().toISOString(),
+          });
+        }
+      }
+    }
+
     return { success: true };
   },
 });

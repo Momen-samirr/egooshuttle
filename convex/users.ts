@@ -53,8 +53,11 @@ async function requireIdentity(ctx: MutationCtx | QueryCtx) {
 // ---------------------------------------------------------------------------
 export const getOrCreateAppUser = mutation({
   args: {},
-  handler: async (ctx): Promise<Doc<"appUsers">> => {
-    const identity = await requireIdentity(ctx);
+  handler: async (ctx): Promise<Doc<"appUsers"> | null> => {
+    const identity = await ctx.auth.getUserIdentity();
+    // Gracefully return null if auth session isn't ready yet.
+    // The client-side guard will re-invoke once the session is established.
+    if (!identity) return null;
 
     const authUserId = await getAuthUserId(ctx);
     let nameFallback = identity.name;
