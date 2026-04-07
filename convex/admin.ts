@@ -842,7 +842,7 @@ export const getAdminDrivers = query({
     
     // Enrich with appUser info (names, emails)
     return await Promise.all(
-      drivers.map(async (driver: any) => {
+      drivers.map(async (driver) => {
         const user = await ctx.db.get(driver.userId);
         return {
           ...driver,
