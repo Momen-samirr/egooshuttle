@@ -37,7 +37,11 @@ export const getMyUpcomingTrips = query({
     const bookings = await ctx.db
       .query("bookings")
       .withIndex("by_user", (q) => q.eq("userId", appUser._id))
-      .filter((q) => q.eq(q.field("status"), "confirmed"))
+      .filter((q) => q.or(
+        q.eq(q.field("status"), "confirmed"),
+        q.eq(q.field("status"), "pending"),
+        q.eq(q.field("status"), "under_review")
+      ))
       .order("desc")
       .collect();
 

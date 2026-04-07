@@ -23,7 +23,8 @@ export default function MyBookingsPage() {
   const today = new Date().toISOString().split("T")[0];
 
   const upcomingBookings = bookingsData.filter(b => 
-    b.status === "confirmed" && b.days.some(day => day.date >= today && day.status === "active")
+    (b.status === "confirmed" || b.status === "pending" || b.status === "under_review") && 
+    b.days.some(day => day.date >= today && (day.status === "active" || day.status === "reserved"))
   );
 
   const completedBookings = bookingsData.filter(b => 
@@ -100,11 +101,17 @@ export default function MyBookingsPage() {
                         <div className="flex flex-col gap-1">
                           <div className="flex items-center gap-2">
                             <span className="text-xs font-bold uppercase tracking-widest text-blue-600">Booking ID: {booking._id.slice(0, 8)}</span>
-                            <span className="w-1.5 h-1.5 rounded-full bg-green-600 shadow-[0_0_8px_rgba(0,110,44,0.4)]"></span>
+                            <span className={`w-1.5 h-1.5 rounded-full ${booking.status === "confirmed" ? "bg-green-600 shadow-[0_0_8px_rgba(0,110,44,0.4)]" : "bg-orange-500 shadow-[0_0_8px_rgba(249,115,22,0.4)]"}`}></span>
                           </div>
                           <h3 className="text-lg font-bold">{booking.tripOrigin} → {booking.tripDestination}</h3>
                         </div>
-                        <div className="bg-green-100 text-green-800 px-3 py-1 rounded-full text-[10px] font-bold uppercase">Confirmed</div>
+                        {booking.status === "confirmed" ? (
+                          <div className="bg-green-100 text-green-800 px-3 py-1 rounded-full text-[10px] font-bold uppercase">Confirmed</div>
+                        ) : booking.status === "under_review" ? (
+                          <div className="bg-orange-100 text-orange-800 px-3 py-1 rounded-full text-[10px] font-bold uppercase animate-pulse">Under Review</div>
+                        ) : (
+                          <div className="bg-slate-100 text-slate-800 px-3 py-1 rounded-full text-[10px] font-bold uppercase">Pending Payment</div>
+                        )}
                       </div>
 
                       <div className="flex flex-wrap items-center gap-8">

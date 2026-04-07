@@ -350,30 +350,33 @@ export const createMultiDayBooking = mutation({
       updatedAt: now,
     });
 
-    // For InstaPay: Pre-provision the booking and reserve seats immediately
-    if (args.paymentMethod === "instapay") {
-      const bookingId = await ctx.db.insert("bookings", {
-        tripId: args.tripId,
-        userId: appUser._id,
-        seatsBooked: args.seatsBooked,
-        paymentMethod: "instapay",
-        paymentStatus: "pending",
-        status: "pending",
-        totalAmount,
-        selectedDays: sorted,
-        weekStartDate,
-        createdAt: now,
-      });
+    // Pre-provision the booking and reserve seats immediately for ALL methods
+    const bookingId = await ctx.db.insert("bookings", {
+      tripId: args.tripId,
+      userId: appUser._id,
+      seatsBooked: args.seatsBooked,
+      paymentMethod: args.paymentMethod,
+      paymentStatus: "pending",
+      status: "pending",
+      totalAmount,
+      selectedDays: sorted,
+      weekStartDate,
+      createdAt: now,
+    });
 
-      for (const date of sorted) {
-        await ctx.db.insert("bookingDays", {
-          bookingId,
-          tripId: args.tripId,
-          date,
-          status: "reserved",
-        });
-      }
+    for (const date of sorted) {
+      await ctx.db.insert("bookingDays", {
+        bookingId,
+        tripId: args.tripId,
+        date,
+        status: "reserved",
+      });
     }
+
+    // Link the pre-provisioned bookingId to the payment intent for easy updates later
+    await ctx.db.patch(paymentIntentId, { 
+      bookingPayload: { ...payload, bookingId } 
+    });
 
     return {
       paymentIntentId,
@@ -481,35 +484,40 @@ export const createMultiWeekBooking = mutation({
       updatedAt: now,
     });
 
-    // For InstaPay: Pre-provision bookings and reserve seats across all weeks
-    if (args.paymentMethod === "instapay") {
-      for (const week of weekPlan) {
-        if (week.dates.length === 0) continue;
-        const weekAmount = trip.pricePerSeat * week.dates.length;
-        
-        const bookingId = await ctx.db.insert("bookings", {
-          tripId: args.tripId,
-          userId: appUser._id,
-          seatsBooked: 1,
-          paymentMethod: "instapay",
-          paymentStatus: "pending",
-          status: "pending",
-          totalAmount: weekAmount,
-          selectedDays: week.dates,
-          weekStartDate: week.weekStart,
-          createdAt: now,
-        });
+    // Pre-provision bookings and reserve seats across all weeks for ALL methods
+    const createdBookingIds: Id<"bookings">[] = [];
+    for (const week of weekPlan) {
+      if (week.dates.length === 0) continue;
+      const weekAmount = trip.pricePerSeat * week.dates.length;
+      
+      const bookingId = await ctx.db.insert("bookings", {
+        tripId: args.tripId,
+        userId: appUser._id,
+        seatsBooked: 1,
+        paymentMethod: args.paymentMethod,
+        paymentStatus: "pending",
+        status: "pending",
+        totalAmount: weekAmount,
+        selectedDays: week.dates,
+        weekStartDate: week.weekStart,
+        createdAt: now,
+      });
+      createdBookingIds.push(bookingId);
 
-        for (const date of week.dates) {
-          await ctx.db.insert("bookingDays", {
-            bookingId,
-            tripId: args.tripId,
-            date,
-            status: "reserved",
-          });
-        }
+      for (const date of week.dates) {
+        await ctx.db.insert("bookingDays", {
+          bookingId,
+          tripId: args.tripId,
+          date,
+          status: "reserved",
+        });
       }
     }
+
+    // Link the pre-provisioned bookingIds to the payment intent
+    await ctx.db.patch(paymentIntentId, { 
+      bookingPayload: { ...payload, createdBookingIds } 
+    });
 
     return {
       paymentIntentId,
@@ -542,27 +550,22 @@ export async function executePaymentConfirmation(ctx: MutationCtx, intentId: Id<
       : DEFAULT_CAPACITY;
 
   try {
-    // Re-verify capacity
+    // Verify capacity
     if (payload.type === "single") {
       for (const date of payload.selectedDays) {
         await checkDayAvailability(ctx, intent.tripId, date, intent.userId, capacity);
       }
       
-      const bookingId = await ctx.db.insert("bookings", {
-        tripId: intent.tripId,
-        userId: intent.userId,
-        seatsBooked: payload.seatsBooked,
-        paymentMethod: intent.paymentMethod,
-        paymentStatus: "paid",
-        status: "confirmed",
-        totalAmount: intent.amount,
-        selectedDays: payload.selectedDays,
-        weekStartDate: payload.weekStartDate,
-        createdAt: new Date().toISOString(),
-      });
-
-      for (const date of payload.selectedDays) {
-        await ctx.db.insert("bookingDays", { bookingId, tripId: intent.tripId, date, status: "active" });
+      const bookingId = payload.bookingId;
+      if (bookingId) {
+        await ctx.db.patch(bookingId, { paymentStatus: "paid", status: "confirmed" });
+        const days = await ctx.db
+          .query("bookingDays")
+          .withIndex("by_booking", (q) => q.eq("bookingId", bookingId))
+          .collect();
+        for (const day of days) {
+          await ctx.db.patch(day._id, { status: "active" });
+        }
       }
     } else if (payload.type === "multi") {
       for (const week of payload.weekPlan) {
@@ -571,23 +574,15 @@ export async function executePaymentConfirmation(ctx: MutationCtx, intentId: Id<
         }
       }
       
-      for (const week of payload.weekPlan) {
-        if (week.dates.length === 0) continue;
-        const weekAmount = trip.pricePerSeat * week.dates.length;
-        const bookingId = await ctx.db.insert("bookings", {
-          tripId: intent.tripId,
-          userId: intent.userId,
-          seatsBooked: payload.seatsBooked,
-          paymentMethod: intent.paymentMethod,
-          paymentStatus: "paid",
-          status: "confirmed",
-          totalAmount: weekAmount,
-          selectedDays: week.dates,
-          weekStartDate: week.weekStart,
-          createdAt: new Date().toISOString(),
-        });
-        for (const date of week.dates) {
-          await ctx.db.insert("bookingDays", { bookingId, tripId: intent.tripId, date, status: "active" });
+      const bookingIds: string[] = payload.createdBookingIds || [];
+      for (const bookingId of bookingIds) {
+        await ctx.db.patch(bookingId as Id<"bookings">, { paymentStatus: "paid", status: "confirmed" });
+        const days = await ctx.db
+          .query("bookingDays")
+          .withIndex("by_booking", (q) => q.eq("bookingId", bookingId as Id<"bookings">))
+          .collect();
+        for (const day of days) {
+          await ctx.db.patch(day._id, { status: "active" });
         }
       }
     }
