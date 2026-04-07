@@ -58,8 +58,9 @@ export function useGoogleAuth(): UseGoogleAuthReturn {
     setError(null);
     setIsSigningIn(true);
     try {
-      // 1. Trigger the Google OAuth flow (opens a popup or redirect)
-      await signIn("google");
+      // 1. Trigger the Google OAuth flow and explicitly set the return URL
+      // If we don't set this, it drops the user at standard '/' with ?code= waiting.
+      await signIn("google", { redirectTo: "/dashboard" });
     } catch (err: unknown) {
       // Map known error messages to typed error codes
       const msg = err instanceof Error ? err.message.toLowerCase() : "";
