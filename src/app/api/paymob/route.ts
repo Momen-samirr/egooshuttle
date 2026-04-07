@@ -74,6 +74,8 @@ export async function POST(request: Request) {
         },
         currency: "EGP",
         integration_id: PAYMOB_INTEGRATION_ID,
+        lock_order_when_paid: "false",
+        callback_url: "https://egooshuttle.egoobus.com/payment/callback",
       }),
     });
 

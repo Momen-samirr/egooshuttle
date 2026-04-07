@@ -201,9 +201,16 @@ export const processClientFailsafe = action({
       "source_data.pan", "source_data.sub_type", "source_data.type", "success"
     ];
 
-    const concatenatedString = keys.map((key) => args.queryData[key] || "").join("");
+    const concatenatedString = keys.map((key) => {
+      // Handle source_data fields that might use either . or _
+      let val = args.queryData[key];
+      if (val === undefined && key.includes(".")) {
+        const fallbackKey = key.replace(/\./g, "_");
+        val = args.queryData[fallbackKey];
+      }
+      return val !== undefined && val !== null ? val.toString() : "";
+    }).join("");
     
-    // Note: Since browsers + frontend might distort URL params, this is a best-effort failsafe.
     const encoder = new TextEncoder();
     const keyBuf = encoder.encode(secret);
     const dataBuf = encoder.encode(concatenatedString);
@@ -212,6 +219,7 @@ export const processClientFailsafe = action({
     const calculatedHmac = Array.from(new Uint8Array(signature)).map(b => b.toString(16).padStart(2, "0")).join("");
 
     if (calculatedHmac.toLowerCase() !== args.hmac.toLowerCase()) {
+      console.error("Failsafe HMAC Mismatch:", { calculated: calculatedHmac, passed: args.hmac });
       return { success: false, message: "Invalid Failsafe HMAC" };
     }
 

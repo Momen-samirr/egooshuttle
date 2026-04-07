@@ -32,19 +32,15 @@ function CallbackContent() {
         }
       }
 
-      // 3. Break out of iframe and redirect to final destination
-      const timer = setTimeout(() => {
-        const top = window.top;
-        const targetUrl = success ? "/bookings" : "/dashboard?payment_failed=true";
+      // 3. Break out of iframe and redirect to final destination immediately
+      const top = window.top;
+      const targetUrl = success ? "/bookings" : "/dashboard?payment_failed=true";
 
-        if (top !== window.self && top) {
-          top.location.href = targetUrl;
-        } else {
-          router.push(targetUrl);
-        }
-      }, 3000);
-
-      return () => clearTimeout(timer);
+      if (top !== window.self && top) {
+        top.location.href = targetUrl;
+      } else {
+        router.push(targetUrl);
+      }
     };
 
     handleCallback();
