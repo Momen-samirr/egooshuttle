@@ -123,22 +123,30 @@ export async function getActiveSeatCount(
     }
 
     if (row.status === "reserved") {
-      // Check if the reservation is still valid via its parent paymentHistory (optional)
-      // or if the booking itself exists. To keep it simple and performant,
-      // we check if the paymentHistory linked to the booking is still 'pending' and not expired.
       const booking = await ctx.db.get(row.bookingId);
-      if (booking && booking.status === "pending") {
-         // Find the most recent payment intent for this booking
-         const intent = await ctx.db
-            .query("paymentHistory")
-            .withIndex("by_user", (q) => q.eq("userId", booking.userId))
-            .filter((q) => q.eq(q.field("tripId"), tripId))
-            .order("desc")
-            .first();
-         
-         if (intent && intent.status === "pending" && intent.expiresAt && intent.expiresAt > now) {
-           count++;
-         }
+      if (booking) {
+        if (booking.status === "under_review") {
+          // If InstaPay is under review, the seat is held until Admin approves/rejects
+          count++;
+        } else if (booking.status === "pending") {
+          // Find the most recent payment intent for this booking
+          const intent = await ctx.db
+             .query("paymentHistory")
+             .withIndex("by_user", (q) => q.eq("userId", booking.userId))
+             .filter((q) => q.eq(q.field("tripId"), tripId))
+             .order("desc")
+             .first();
+          
+          if (intent && intent.status === "pending") {
+            if (intent.expiresAt) {
+              if (intent.expiresAt > now) count++;
+            } else {
+              // Paymob intents without expiresAt are held temporarily (assume 1 hour)
+              const intentAge = now - new Date(intent.createdAt).getTime();
+              if (intentAge < 60 * 60 * 1000) count++;
+            }
+          }
+        }
       }
     }
   }
@@ -152,18 +160,13 @@ async function checkDayAvailability(
   userId: Id<"appUsers">,
   capacity: number
 ) {
-  const rows = await ctx.db
-    .query("bookingDays")
-    .withIndex("by_trip_date", (q) => q.eq("tripId", tripId).eq("date", date))
-    .collect();
-
-  const active = rows.filter((r) => r.status === "active");
+  const bookedSeats = await getActiveSeatCount(ctx, tripId, date);
 
   // Capacity guard
-  if (active.length + 1 > capacity) {
+  if (bookedSeats + 1 > capacity) {
     throw new Error(
       `No seats available on ${date} (${dayName(date)}). ` +
-        `${capacity - active.length} remaining.`
+        `${capacity - bookedSeats} remaining.`
     );
   }
 

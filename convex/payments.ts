@@ -1,6 +1,7 @@
 import { v } from "convex/values";
 import { action, mutation, internalMutation, query } from "./_generated/server";
 import { Id } from "./_generated/dataModel";
+import { internal, api } from "./_generated/api";
 
 export const initiatePayment = action({
   args: {
@@ -181,4 +182,48 @@ export const processWebhookCallback = internalMutation({
       }
     }
   },
+});
+
+export const processClientFailsafe = action({
+  args: {
+    hmac: v.string(),
+    queryData: v.any(), // Record<string, string>
+  },
+  handler: async (ctx, args) => {
+    // Manually reconstruct query parameters for HMAC validation as per Paymob Docs
+    const secret = process.env.PAYMOB_HMAC_SECRET;
+    if (!secret) throw new Error("Missing HMAC SECRET");
+
+    const keys = [
+      "amount_cents", "created_at", "currency", "error_occured", "has_parent_transaction",
+      "id", "integration_id", "is_3d_secure", "is_auth", "is_capture", "is_refunded",
+      "is_standalone_payment", "is_voided", "order", "owner", "pending",
+      "source_data.pan", "source_data.sub_type", "source_data.type", "success"
+    ];
+
+    const concatenatedString = keys.map((key) => args.queryData[key] || "").join("");
+    
+    // Note: Since browsers + frontend might distort URL params, this is a best-effort failsafe.
+    const encoder = new TextEncoder();
+    const keyBuf = encoder.encode(secret);
+    const dataBuf = encoder.encode(concatenatedString);
+    const cryptoKey = await crypto.subtle.importKey("raw", keyBuf, { name: "HMAC", hash: "SHA-512" }, false, ["sign"]);
+    const signature = await crypto.subtle.sign("HMAC", cryptoKey, dataBuf);
+    const calculatedHmac = Array.from(new Uint8Array(signature)).map(b => b.toString(16).padStart(2, "0")).join("");
+
+    if (calculatedHmac.toLowerCase() !== args.hmac.toLowerCase()) {
+      return { success: false, message: "Invalid Failsafe HMAC" };
+    }
+
+    const merchantOrderId = args.queryData["order"] || "";
+    if (merchantOrderId) {
+      await ctx.runMutation(internal.payments.processWebhookCallback, {
+        orderId: args.queryData["id"]?.toString() || "",
+        success: args.queryData["success"] === "true",
+        merchantOrderId: merchantOrderId.toString(),
+      });
+      return { success: true };
+    }
+    return { success: false };
+  }
 });

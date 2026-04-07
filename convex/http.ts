@@ -19,11 +19,23 @@ http.route({
       }
 
       const body = await request.json();
-      const obj = body.obj; // Paymob nests the payload inside `obj`
+      console.log("PAYMOB WEBHOOK RECEIVED:", JSON.stringify(body, null, 2));
+
+      // Paymob sometimes sends different events (TRANSACTION, TOKEN). We only care about TRANSACTION.
+      if (body.type !== "TRANSACTION") {
+         console.log("Ignoring non-TRANSACTION webhook type:", body.type);
+         return new Response("OK", { status: 200 });
+      }
+
+      const obj = body.obj;
+      if (!obj || !obj.order) {
+         console.error("Invalid Paymob payload structure");
+         return new Response("Invalid Payload structure", { status: 400 });
+      }
 
       const secret = process.env.PAYMOB_HMAC_SECRET;
       if (!secret) {
-        console.error("Missing PAYMOB_HMAC_SECRET");
+        console.error("Missing PAYMOB_HMAC_SECRET in environment variables");
         return new Response("Internal Error", { status: 500 });
       }
 
@@ -65,11 +77,17 @@ http.route({
         return new Response("Invalid HMAC", { status: 401 }); // Unauthorized
       }
 
+      const merchantOrderId = obj.order?.merchant_order_id || obj.merchant_order_id || "";
+      if (!merchantOrderId) {
+        console.error("Webhook missing merchant_order_id");
+        return new Response("Missing Merchant Order ID", { status: 400 });
+      }
+
       // Valid webhook payload! Call our internal mutation.
       await ctx.runMutation(internal.payments.processWebhookCallback, {
         orderId: obj.order.id.toString(),
         success: obj.success === true,
-        merchantOrderId: obj.order.merchant_order_id,
+        merchantOrderId: merchantOrderId.toString(),
       });
 
       return new Response("OK", { status: 200 });
