@@ -831,3 +831,26 @@ export const deleteAllTrips = mutation({
     };
   },
 });
+
+// Admin Query: Get all drivers to manage their verification status
+export const getAdminDrivers = query({
+  args: {},
+  handler: async (ctx) => {
+    await requireAdmin(ctx);
+    
+    const drivers = await ctx.db.query("drivers").order("desc").collect();
+    
+    // Enrich with appUser info (names, emails)
+    return await Promise.all(
+      drivers.map(async (driver: any) => {
+        const user = await ctx.db.get(driver.userId);
+        return {
+          ...driver,
+          userName: user?.name ?? "Unknown",
+          userEmail: user?.email ?? "Unknown",
+          userAvatar: user?.avatarUrl,
+        };
+      })
+    );
+  },
+});

@@ -65,11 +65,11 @@ export default function RoleSetupPage() {
       setIsSubmitting(true);
 
       if (selectedRole === "driver") {
+        // Driver — go to driver details step
         await updateProfile({
           role: selectedRole,
-          isOnboarded: true,
         });
-        router.push(ROUTES.DRIVER);
+        router.push(ROUTES.ONBOARDING_DRIVER);
       } else {
         // customer — continues to location preferences (Step 3)
         await updateProfile({

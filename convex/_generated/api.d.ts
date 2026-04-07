@@ -13,6 +13,7 @@ import type * as auth from "../auth.js";
 import type * as bookingDays from "../bookingDays.js";
 import type * as bookings from "../bookings.js";
 import type * as crons from "../crons.js";
+import type * as drivers from "../drivers.js";
 import type * as http from "../http.js";
 import type * as instapay from "../instapay.js";
 import type * as payments from "../payments.js";
@@ -32,6 +33,7 @@ declare const fullApi: ApiFromModules<{
   bookingDays: typeof bookingDays;
   bookings: typeof bookings;
   crons: typeof crons;
+  drivers: typeof drivers;
   http: typeof http;
   instapay: typeof instapay;
   payments: typeof payments;

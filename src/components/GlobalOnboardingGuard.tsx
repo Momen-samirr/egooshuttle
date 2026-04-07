@@ -4,7 +4,7 @@ import { useGoogleAuth } from "@/features/auth/hooks/useGoogleAuth";
 import { useRouter, usePathname } from "next/navigation";
 import { useEffect, useRef } from "react";
 import { ROUTES } from "@/lib/constants";
-import { useMutation } from "convex/react";
+import { useMutation, useQuery } from "convex/react";
 import { api } from "../../convex/_generated/api";
 
 
@@ -29,6 +29,12 @@ export function GlobalOnboardingGuard({ children }: { children: React.ReactNode 
     }
   }, [isAuthenticated, appUser, getOrCreateAppUser]);
 
+  // Subscribe to the driver profile if the user is a driver
+  const driverProfile = useQuery(
+    api.drivers.getCurrentDriverProfile,
+    appUser?.role === "driver" ? undefined : "skip" // Only run if driver
+  );
+
   // 2. Assert onboarding & RBAC
   useEffect(() => {
     if (isLoading) return;
@@ -44,8 +50,26 @@ export function GlobalOnboardingGuard({ children }: { children: React.ReactNode 
 
       // Admins bypass onboarding constraints inherently
       if (!appUser.isOnboarded && !isAdmin && !inOnboarding && !inApi) {
-        router.push(ROUTES.ONBOARDING_PROFILE);
-        return;
+        // If driver, we might be going to /onboarding/driver
+        if (isDriver && pathname !== ROUTES.ONBOARDING_DRIVER) {
+           router.push(ROUTES.ONBOARDING_DRIVER);
+           return;
+        } else if (!isDriver && pathname !== ROUTES.ONBOARDING_PROFILE) {
+           router.push(ROUTES.ONBOARDING_PROFILE);
+           return;
+        }
+      }
+
+      // Enforce Driver Pending Activation
+      if (isDriver && appUser.isOnboarded && driverProfile !== undefined) {
+        if (driverProfile && !driverProfile.isVerified && pathname !== ROUTES.DRIVER_PENDING) {
+          router.push(ROUTES.DRIVER_PENDING);
+          return;
+        }
+        if (driverProfile && driverProfile.isVerified && pathname === ROUTES.DRIVER_PENDING) {
+          router.push(ROUTES.DRIVER);
+          return;
+        }
       }
 
       // Enforce strict Role-Based Access Controls
@@ -72,7 +96,7 @@ export function GlobalOnboardingGuard({ children }: { children: React.ReactNode 
         return;
       }
     }
-  }, [isLoading, isAuthenticated, appUser, pathname, router]);
+  }, [isLoading, isAuthenticated, appUser, driverProfile, pathname, router]);
 
 
   return <>{children}</>;

@@ -20,6 +20,7 @@ export const ROUTES = {
   ONBOARDING_PROFILE: "/onboarding/profile",
   ONBOARDING_ROLE: "/onboarding/role",
   ONBOARDING_LOCATION: "/onboarding/location",
+  ONBOARDING_DRIVER: "/onboarding/driver",
   // Dashboard (inside (dashboard) route group)
 
 
@@ -30,16 +31,17 @@ export const ROUTES = {
   PROFILE: "/profile",
   // Driver
   DRIVER: "/driver",
+  DRIVER_PENDING: "/driver/pending",
   DRIVER_AVAILABLE_TRIPS: "/driver/trips",
   // Admin
   ADMIN: "/admin",
   ADMIN_TRIPS: "/admin/trips",
+  ADMIN_BOOKINGS: "/admin/bookings",
+  ADMIN_INSTAPAY: "/admin/instapay",
   ADMIN_DRIVERS: "/admin/drivers",
   ADMIN_USERS: "/admin/users",
   ADMIN_VEHICLES: "/admin/vehicles",
   ADMIN_ANALYTICS: "/admin/analytics",
-  ADMIN_BOOKINGS: "/admin/bookings",
-  ADMIN_INSTAPAY: "/admin/instapay",
 } as const;
 
 // Payment Methods
