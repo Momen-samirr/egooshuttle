@@ -1,0 +1,7 @@
+{
+  "functions": "convex/",
+  "ignoredPaths": [
+    "**/.git/**",
+    "**/node_modules/**"
+  ]
+}
